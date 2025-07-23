@@ -19,5 +19,18 @@ services:
     ports:
       - "8080:8080"
 
+  backend:
+    build: .
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/app                      
+      - ./downloads:/app/downloads 
+    environment:
+      - DATABASE_URL=postgresql://crateuser:cratesenha@db:5432/cratecloud
+    depends_on:
+      - db
+
 volumes:
   pgdata:
