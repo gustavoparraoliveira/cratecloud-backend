@@ -85,7 +85,7 @@ app.post('/tracks', authenticateToken, async (req, res) => {
 
     if (!fs.existsSync(downloadFolder)) fs.mkdirSync(downloadFolder);
 
-    // Extrai metadata
+    // Extrai metadata test
     const { stdout: metadataRaw } = await exec(`yt-dlp --dump-json "${url}"`);
     const metadata = JSON.parse(metadataRaw);
 
