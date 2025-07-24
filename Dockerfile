@@ -1,29 +1,30 @@
-# Usa imagem oficial do Node.js
 FROM node:20
 
-# Instala dependências do sistema, incluindo ffmpeg e yt-dlp
-RUN apt-get update && \
-    apt-get install -y ffmpeg curl && \
-    curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
-    chmod a+rx /usr/local/bin/yt-dlp
+# Atualiza o apt e instala ffmpeg, curl, bash, python3 e pip
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    curl \
+    bash \
+    python3 \
+    python3-venv \
+    python3-pip && \
+    rm -rf /var/lib/apt/lists/*
 
-# Define diretório de trabalho
+# Cria ambiente virtual, instala yt-dlp dentro dele e cria link simbólico
+RUN python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --upgrade pip yt-dlp && \
+    ln -s /opt/venv/bin/yt-dlp /usr/local/bin/yt-dlp
+
 WORKDIR /app
 
-# Copia arquivos de dependências
 COPY package*.json ./
 
-# Instala dependências do Node.js
 RUN npm install
 
-# Copia o restante do projeto
 COPY . .
 
-# Gera Prisma Client
 RUN npx prisma generate
 
-# Expõe porta
 EXPOSE 3000
 
-# Inicia o servidor
-CMD ["node", "src/index.js"]
+CMD npx prisma migrate deploy && node src/index.js

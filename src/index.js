@@ -1,18 +1,32 @@
-require('dotenv').config() 
+import dotenv from 'dotenv';
+dotenv.config();
 
-const { exec } = require('child_process')
-const fs = require('fs')
-const authenticateToken = require('./middleware/auth')
-const jwt = require('jsonwebtoken')
-const bcrypt = require('bcrypt')
-const express = require('express')
-const { PrismaClient } = require('@prisma/client')
-const path = require('path')
-const prisma = new PrismaClient()
-const app = express()
+import { promisify } from 'util';
+import { exec as execCb } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
+import express from 'express';
+import { PrismaClient } from '@prisma/client';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'; 
 
-app.use('/downloads', express.static(path.join(__dirname, '..', 'downloads')))
+import authenticateToken from './middleware/auth.js';
+
+const exec = promisify(execCb);
+const prisma = new PrismaClient();
+const app = express();
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
+
 app.use(express.json())
+
+const execAsync = promisify(exec);
 
 app.post('/signup', async (req, res) => {
   const { email, password } = req.body
@@ -60,66 +74,66 @@ app.post('/login', async (req, res) => {
   }
 })
 
-
-
 app.post('/tracks', authenticateToken, async (req, res) => {
-  const { url, userId } = req.body;
+  const { url } = req.body;
+  const userId = req.user.userId;
 
-  if (!url || !userId) {
-    return res.status(400).json({ error: 'url and userId are required' });
-  }
+  if (!url) return res.status(400).json({ error: 'url is required' });
 
   try {
-    const downloadFolder = path.join(__dirname, '..', 'downloads');
+    const downloadFolder = path.join(process.cwd(), 'downloads');
 
-    if (!fs.existsSync(downloadFolder)) {
-      fs.mkdirSync(downloadFolder);
-    }
+    if (!fs.existsSync(downloadFolder)) fs.mkdirSync(downloadFolder);
 
-    const filename = `track-${Date.now()}.mp3`;
+    // Extrai metadata
+    const { stdout: metadataRaw } = await exec(`yt-dlp --dump-json "${url}"`);
+    const metadata = JSON.parse(metadataRaw);
+
+    const filename = `${metadata.title}-${Date.now()}.mp3`;
     const outputPath = path.join(downloadFolder, filename);
 
-    exec(`yt-dlp --dump-json "${url}"`, async (error, stdout) => {
-      if (error) {
-        console.error('Erro ao extrair metadata:', error);
-        return res.status(500).json({ error: 'Failed to extract metadata' });
+    // Baixa áudio
+    await exec(`yt-dlp -x --audio-format mp3 -o "${outputPath}" "${url}"`);
+
+    // Upload para S3 via stream
+    const fileStream = fs.createReadStream(outputPath);
+    const s3Key = `tracks/${filename}`;
+
+    const uploadParams = {
+      Bucket: process.env.AWS_BUCKET_NAME,
+      Key: s3Key,
+      Body: fileStream,
+      ContentType: 'audio/mpeg'
+    };
+
+    await s3.send(new PutObjectCommand(uploadParams));
+
+    // Remove arquivo local
+    fs.unlinkSync(outputPath);
+
+    const s3Url = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
+
+    // Salva no banco
+    const track = await prisma.track.create({
+      data: {
+        url,
+        userId,
+        filename,
+        s3Url,
+        title: metadata.title || null,
+        artist: metadata.uploader || null,
+        duration: metadata.duration || null,
+        thumbnail: metadata.thumbnail || null,
       }
-
-      const metadata = JSON.parse(stdout);
-
-      const title = metadata.title || null;
-      const artist = metadata.uploader || null;
-      const duration = metadata.duration || null;
-      const thumbnail = metadata.thumbnail || null;
-
-      // Agora fazer o download
-      const cmd = `yt-dlp -x --audio-format mp3 -o "${outputPath}" "${url}"`;
-      exec(cmd, async (dlError) => {
-        if (dlError) {
-          console.error('Erro ao baixar com yt-dlp:', dlError);
-          return res.status(500).json({ error: 'Failed to download audio' });
-        }
-
-        const track = await prisma.track.create({
-          data: {
-            url,
-            userId,
-            filename,
-            title,
-            artist,
-            duration,
-            thumbnail
-          }
-        });
-
-        res.status(201).json(track);
-      });
     });
+
+    res.status(201).json(track);
+
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: error.message });
   }
 });
-
 
 app.get('/tracks', authenticateToken, async (req, res) => {
   try {

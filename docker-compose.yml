@@ -20,6 +20,11 @@ services:
       - "8080:8080"
 
   backend:
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
     build: .
     restart: always
     ports:
